@@ -7,6 +7,7 @@ public class PlayerShooting : MonoBehaviour
     public int damagePerShot = 20;
     public float timeBetweenBullets = 0.15f;
     public float range = 100f;
+    public float shotHeight = 0.6f;
 
     float timer;
     Ray shootRay;
@@ -55,11 +56,18 @@ public class PlayerShooting : MonoBehaviour
         gunParticles.Stop();
         gunParticles.Play();
 
-        gunLine.enabled = true;
-        gunLine.SetPosition(0, transform.position);
+        // Bắn ngang ở tầm thân quái (animation có thể hạ nòng súng sát mặt đất)
+        Vector3 origin = transform.position;
+        origin.y = transform.root.position.y + shotHeight;
+        Vector3 dir = transform.forward;
+        dir.y = 0f;
+        dir.Normalize();
 
-        shootRay.origin = transform.position;
-        shootRay.direction = transform.forward;
+        gunLine.enabled = true;
+        gunLine.SetPosition(0, origin);
+
+        shootRay.origin = origin;
+        shootRay.direction = dir;
 
         if (Physics.Raycast(shootRay, out shootHit, range, shootableMask))
         {
