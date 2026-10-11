@@ -18,6 +18,7 @@ public static class SurvivalShooterBuilder
     public static void Build()
     {
         SetupLayers();
+        IconGenerator.GenerateAll();
         EnsureFolder(Root + "Scenes");
         EnsureFolder(Gen);
 
@@ -149,22 +150,26 @@ public static class SurvivalShooterBuilder
         // Hào quang lửa (bật khi chọn buff)
         var aura = new GameObject("DamageAura");
         aura.transform.SetParent(player.transform, false);
-        var ring = aura.AddComponent<LineRenderer>();
         var ringMat = new Material(Shader.Find("Universal Render Pipeline/Particles/Unlit"));
-        ringMat.SetColor("_BaseColor", new Color(1f, 0.45f, 0.1f, 0.8f));
+        ringMat.SetTexture("_BaseMap", AssetDatabase.LoadAssetAtPath<Texture2D>(IconGenerator.ArtDir + "aura_ring.png"));
+        ringMat.SetColor("_BaseColor", Color.white);
         ringMat.SetFloat("_Surface", 1); ringMat.SetFloat("_Blend", 2);
         ringMat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
         ringMat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.One);
         ringMat.SetFloat("_ZWrite", 0); ringMat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
         ringMat.renderQueue = 3000;
         SaveAsset(ringMat, Gen + "AuraMaterial.mat");
-        ring.sharedMaterial = ringMat;
-        ring.loop = true;
-        ring.useWorldSpace = true;
-        ring.widthMultiplier = 0.15f;
-        ring.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        ring.enabled = false;
-        aura.AddComponent<DamageAura>();
+
+        // Quad nằm ngang, không làm con của người chơi để không xoay theo hướng ngắm
+        var ringQuad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        ringQuad.name = "AuraRing";
+        Object.DestroyImmediate(ringQuad.GetComponent<Collider>());
+        var ringRend = ringQuad.GetComponent<MeshRenderer>();
+        ringRend.sharedMaterial = ringMat;
+        ringRend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        ringRend.receiveShadows = false;
+        ringRend.enabled = false;
+        aura.AddComponent<DamageAura>().ringRenderer = ringRend;
         health.deathClip = Load<AudioClip>("Audio/Effects/Player Death.wav");
 
         // Nòng súng
@@ -386,7 +391,7 @@ public static class SurvivalShooterBuilder
         um.titleText = upTitle;
 
         var hint = NewText("Hint", panel.transform, font, 22, "Click vao the hoac bam phim 1 / 2 / 3");
-        Anchor(hint.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, -250), new Vector2(900, 40), new Vector2(0.5f, 0.5f));
+        Anchor(hint.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, -232), new Vector2(900, 40), new Vector2(0.5f, 0.5f));
         hint.color = new Color(1, 1, 1, 0.6f);
 
         um.cardButtons = new Button[3];
@@ -394,39 +399,67 @@ public static class SurvivalShooterBuilder
         um.cardDescriptions = new Text[3];
         um.cardRarities = new Text[3];
         um.cardBackgrounds = new Image[3];
-        var panelSprite = LoadSprite("Textures/UIPanel.png");
+        um.cardIcons = new Image[3];
+        um.rarityFrames = new[] { ArtSprite("card_common"), ArtSprite("card_rare"), ArtSprite("card_epic") };
+        var iconList = new List<Sprite>();
+        foreach (var f in System.IO.Directory.GetFiles(IconGenerator.IconDir, "*.png"))
+        {
+            var sp = AssetDatabase.LoadAssetAtPath<Sprite>(f.Replace('\\', '/'));
+            if (sp != null) iconList.Add(sp);
+        }
+        um.icons = iconList.ToArray();
+        um.slotSprite = ArtSprite("icon_slot");
+        um.font = font;
+
         for (int i = 0; i < 3; i++)
         {
             var card = NewUI<Image>("Card" + (i + 1), panel.transform);
-            card.sprite = panelSprite;
+            card.sprite = um.rarityFrames[0];
             card.type = Image.Type.Sliced;
-            Anchor(card.rectTransform, new Vector2(0.5f, 0.5f), new Vector2((i - 1) * 330, -10), new Vector2(300, 380), new Vector2(0.5f, 0.5f));
-            card.gameObject.AddComponent<Outline>().effectColor = new Color(1, 1, 1, 0.25f);
+            Anchor(card.rectTransform, new Vector2(0.5f, 0.5f), new Vector2((i - 1) * 330, -10), new Vector2(300, 400), new Vector2(0.5f, 0.5f));
             var btn = card.gameObject.AddComponent<Button>();
             var colors = btn.colors;
-            colors.highlightedColor = new Color(1.25f, 1.25f, 1.25f);
+            colors.highlightedColor = new Color(1.2f, 1.2f, 1.2f);
             colors.pressedColor = new Color(0.8f, 0.8f, 0.8f);
             colors.fadeDuration = 0.05f;
             btn.colors = colors;
 
-            var rarity = NewText("Rarity", card.transform, font, 22, "[1] THUONG");
-            Anchor(rarity.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -22), new Vector2(280, 34), new Vector2(0.5f, 1));
-            var name = NewText("Name", card.transform, font, 36, "Ten");
-            Anchor(name.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -70), new Vector2(280, 90), new Vector2(0.5f, 1));
-            name.horizontalOverflow = HorizontalWrapMode.Wrap;
+            var rarity = NewText("Rarity", card.transform, font, 20, "[1] THUONG");
+            Anchor(rarity.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -20), new Vector2(280, 30), new Vector2(0.5f, 1));
+            var icon = NewUI<Image>("Icon", card.transform);
+            icon.preserveAspect = true;
+            icon.raycastTarget = false;
+            Anchor(icon.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -50), new Vector2(88, 88), new Vector2(0.5f, 1));
+            var name = NewText("Name", card.transform, font, 32, "Ten");
+            Anchor(name.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -150), new Vector2(280, 46), new Vector2(0.5f, 1));
             name.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(2, -2);
-            var desc = NewText("Description", card.transform, font, 22, "Mo ta");
-            Anchor(desc.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -175), new Vector2(260, 190), new Vector2(0.5f, 1));
+            var desc = NewText("Description", card.transform, font, 21, "Mo ta");
+            Anchor(desc.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -205), new Vector2(256, 180), new Vector2(0.5f, 1));
             desc.alignment = TextAnchor.UpperCenter;
             desc.horizontalOverflow = HorizontalWrapMode.Wrap;
-            desc.color = new Color(0.92f, 0.92f, 0.95f);
+            desc.color = new Color(0.9f, 0.9f, 0.95f);
 
             um.cardButtons[i] = btn;
             um.cardNames[i] = name;
             um.cardDescriptions[i] = desc;
             um.cardRarities[i] = rarity;
             um.cardBackgrounds[i] = card;
+            um.cardIcons[i] = icon;
         }
+
+        // ---- Thanh skill đã lấy (dưới cùng) ----
+        var bar = new GameObject("SkillBar", typeof(RectTransform), typeof(HorizontalLayoutGroup)).GetComponent<RectTransform>();
+        bar.SetParent(canvasGo.transform, false);
+        bar.SetSiblingIndex(panel.transform.GetSiblingIndex());
+        Anchor(bar, new Vector2(0.5f, 0), new Vector2(0, 52), new Vector2(1000, 48), new Vector2(0.5f, 0));
+        var layout = bar.GetComponent<HorizontalLayoutGroup>();
+        layout.spacing = 6;
+        layout.childAlignment = TextAnchor.MiddleCenter;
+        layout.childControlWidth = false;
+        layout.childControlHeight = false;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = false;
+        um.skillBar = bar;
 
         // ---- Game Over / Chiến thắng ----
         var go = new GameObject("GameOver", typeof(RectTransform), typeof(CanvasGroup));
@@ -536,6 +569,13 @@ public static class SurvivalShooterBuilder
 
     // ---------- Helpers ----------
 
+    static Sprite ArtSprite(string name)
+    {
+        var sp = AssetDatabase.LoadAssetAtPath<Sprite>(IconGenerator.ArtDir + name + ".png");
+        if (sp == null) Debug.LogError("Missing art " + name + " (run Tools > Survival Shooter > Generate Icons)");
+        return sp;
+    }
+
     static void SetupLayers()
     {
         var tm = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
@@ -566,6 +606,7 @@ public static class SurvivalShooterBuilder
         if (imp.textureType != TextureImporterType.Sprite)
         {
             imp.textureType = TextureImporterType.Sprite;
+            imp.spriteImportMode = SpriteImportMode.Single;
             imp.SaveAndReimport();
         }
         return AssetDatabase.LoadAssetAtPath<Sprite>(path);

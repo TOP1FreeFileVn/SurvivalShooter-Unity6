@@ -1,6 +1,7 @@
 using UnityEngine;
 
 // Vũ khí phụ kiểu Garlic (Vampire Survivors): vòng lửa quanh người chơi, gây sát thương định kỳ.
+// Hình ảnh là một quad nằm trên sàn dùng texture vòng lửa, xoay + phập phồng.
 public class DamageAura : MonoBehaviour
 {
     public float baseRadius = 2.2f;
@@ -8,18 +9,20 @@ public class DamageAura : MonoBehaviour
     public int baseDamage = 8;
     public int damagePerLevel = 5;
     public float tickInterval = 0.5f;
+    public Renderer ringRenderer;
 
     PlayerStats stats;
-    LineRenderer ring;
     float timer;
+    float flash;
     readonly Collider[] buffer = new Collider[64];
     int shootableMask;
+    MaterialPropertyBlock block;
 
     void Awake()
     {
         stats = GetComponentInParent<PlayerStats>();
-        ring = GetComponent<LineRenderer>();
         shootableMask = LayerMask.GetMask("Shootable");
+        block = new MaterialPropertyBlock();
     }
 
     float Radius => baseRadius + radiusPerLevel * (stats.auraLevel - 1);
@@ -27,10 +30,19 @@ public class DamageAura : MonoBehaviour
     void Update()
     {
         bool active = stats.auraLevel > 0;
-        ring.enabled = active;
+        ringRenderer.enabled = active;
         if (!active) return;
 
-        DrawRing();
+        // Quad không xoay theo người chơi; chỉ tự quay quanh trục Y
+        float pulse = 1f + Mathf.Sin(Time.time * 6f) * 0.03f + flash * 0.08f;
+        ringRenderer.transform.SetPositionAndRotation(
+            transform.position + Vector3.up * 0.05f,
+            Quaternion.Euler(90f, Time.time * 40f, 0f));
+        ringRenderer.transform.localScale = Vector3.one * Radius * 2f * pulse;
+
+        flash = Mathf.MoveTowards(flash, 0f, Time.deltaTime * 4f);
+        block.SetColor("_BaseColor", new Color(1f, 1f, 1f, 0.75f + flash * 0.25f));
+        ringRenderer.SetPropertyBlock(block);
 
         timer += Time.deltaTime;
         if (timer < tickInterval) return;
@@ -38,25 +50,16 @@ public class DamageAura : MonoBehaviour
 
         int dmg = Mathf.RoundToInt((baseDamage + damagePerLevel * (stats.auraLevel - 1)) * stats.damageMultiplier);
         int n = Physics.OverlapSphereNonAlloc(transform.position, Radius, buffer, shootableMask, QueryTriggerInteraction.Ignore);
+        bool hitAny = false;
         for (int i = 0; i < n; i++)
         {
             var enemy = buffer[i].GetComponent<EnemyHealth>();
             if (enemy != null && !enemy.IsDead)
+            {
                 enemy.TakeDamage(dmg, buffer[i].bounds.center, false);
+                hitAny = true;
+            }
         }
-    }
-
-    void DrawRing()
-    {
-        const int segments = 48;
-        ring.positionCount = segments;
-        float r = Radius;
-        float pulse = 1f + Mathf.Sin(Time.time * 6f) * 0.03f;
-        Vector3 c = transform.position;
-        for (int i = 0; i < segments; i++)
-        {
-            float a = i * Mathf.PI * 2f / segments + Time.time * 0.8f;
-            ring.SetPosition(i, c + new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * r * pulse + Vector3.up * 0.1f);
-        }
+        if (hitAny) flash = 1f;
     }
 }
