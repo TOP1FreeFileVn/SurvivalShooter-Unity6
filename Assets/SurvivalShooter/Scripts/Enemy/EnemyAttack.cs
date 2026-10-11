@@ -20,6 +20,11 @@ public class EnemyAttack : MonoBehaviour
         anim = GetComponent<Animator>();
     }
 
+    public void Scale(float damageMul)
+    {
+        attackDamage = Mathf.RoundToInt(attackDamage * damageMul);
+    }
+
     void OnTriggerEnter(Collider other)
     {
         if (other.gameObject == player) playerInRange = true;

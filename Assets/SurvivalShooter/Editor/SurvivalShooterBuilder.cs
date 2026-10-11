@@ -83,13 +83,32 @@ public static class SurvivalShooterBuilder
         var hell = CreateEnemyPrefab("Hellephant", "Hellephant", "Hellephant", 300, 50, 2.2f, enemyCtrl);
 
         // UI
-        var ui = CreateUI(player.GetComponent<PlayerHealth>());
+        var ui = CreateUI(player.GetComponent<PlayerHealth>(), player.GetComponent<PlayerStats>());
 
-        // Spawner
-        var mgr = new GameObject("EnemyManagers");
-        AddSpawner(mgr, "ZombunnySpawner", bunny, 3f, player, new Vector3(-20.5f, 0, 12.5f), 130);
-        AddSpawner(mgr, "ZomBearSpawner", bear, 4f, player, new Vector3(22.5f, 0, 15f), 240);
-        AddSpawner(mgr, "HellephantSpawner", hell, 12f, player, new Vector3(0, 0, 32f), 180);
+        // Wave manager + điểm spawn quanh bản đồ
+        var wm = new GameObject("WaveManager").AddComponent<WaveManager>();
+        var points = new List<Transform>();
+        foreach (var pos in new[] {
+            new Vector3(-20.5f, 0, 12.5f), new Vector3(22.5f, 0, 15f), new Vector3(0, 0, 32f),
+            new Vector3(-22f, 0, -12f), new Vector3(20f, 0, -18f), new Vector3(0f, 0, -24f) })
+            points.Add(AddSpawnPoint(wm.transform, pos));
+        wm.spawnPoints = points.ToArray();
+        wm.enemies = new[] {
+            new WaveManager.EnemyType { prefab = bunny, unlockWave = 1, weight = 5f },
+            new WaveManager.EnemyType { prefab = bear, unlockWave = 3, weight = 3f },
+            new WaveManager.EnemyType { prefab = hell, unlockWave = 6, weight = 1f },
+        };
+        wm.playerHealth = player.GetComponent<PlayerHealth>();
+        wm.upgradeManager = ui.GetComponent<UpgradeManager>();
+        wm.waveText = ui.transform.Find("WaveText").GetComponent<Text>();
+        wm.timerText = ui.transform.Find("TimerText").GetComponent<Text>();
+        wm.bannerText = ui.transform.Find("BannerText").GetComponent<Text>();
+        wm.xpGemPrefab = CreateXpGemPrefab();
+        wm.popupContainer = (RectTransform)ui.transform.Find("Popups");
+        wm.popupFont = Load<Font>("Fonts/LuckiestGuy/LuckiestGuy.ttf");
+
+        var es = new GameObject("EventSystem", typeof(UnityEngine.EventSystems.EventSystem));
+        es.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
 
         EditorSceneManager.SaveScene(scene, ScenePath);
         var scenes = new List<EditorBuildSettingsScene> { new EditorBuildSettingsScene(ScenePath, true) };
@@ -123,8 +142,29 @@ public static class SurvivalShooterBuilder
         audio.clip = Load<AudioClip>("Audio/Effects/Player Hurt.wav");
         audio.playOnAwake = false;
 
+        player.AddComponent<PlayerStats>();
         player.AddComponent<PlayerMovement>();
         var health = player.AddComponent<PlayerHealth>();
+
+        // Hào quang lửa (bật khi chọn buff)
+        var aura = new GameObject("DamageAura");
+        aura.transform.SetParent(player.transform, false);
+        var ring = aura.AddComponent<LineRenderer>();
+        var ringMat = new Material(Shader.Find("Universal Render Pipeline/Particles/Unlit"));
+        ringMat.SetColor("_BaseColor", new Color(1f, 0.45f, 0.1f, 0.8f));
+        ringMat.SetFloat("_Surface", 1); ringMat.SetFloat("_Blend", 2);
+        ringMat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        ringMat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.One);
+        ringMat.SetFloat("_ZWrite", 0); ringMat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        ringMat.renderQueue = 3000;
+        SaveAsset(ringMat, Gen + "AuraMaterial.mat");
+        ring.sharedMaterial = ringMat;
+        ring.loop = true;
+        ring.useWorldSpace = true;
+        ring.widthMultiplier = 0.15f;
+        ring.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        ring.enabled = false;
+        aura.AddComponent<DamageAura>();
         health.deathClip = Load<AudioClip>("Audio/Effects/Player Death.wav");
 
         // Nòng súng
@@ -202,6 +242,7 @@ public static class SurvivalShooterBuilder
         var health = go.AddComponent<EnemyHealth>();
         health.startingHealth = hp;
         health.scoreValue = score;
+        health.xpValue = model == "Hellephant" ? 8 : model == "ZomBear" ? 2 : 1;
         health.deathClip = Load<AudioClip>("Audio/Effects/" + audioPrefix + " Death.wav");
         var attack = go.AddComponent<EnemyAttack>();
         attack.attackDamage = model == "Hellephant" ? 20 : 10;
@@ -213,27 +254,46 @@ public static class SurvivalShooterBuilder
         return prefab;
     }
 
-    static void AddSpawner(GameObject parent, string name, GameObject enemy, float spawnTime, GameObject player, Vector3 pos, float yRot)
+    static Transform AddSpawnPoint(Transform parent, Vector3 pos)
     {
-        var go = new GameObject(name);
-        go.transform.SetParent(parent.transform);
-        var point = new GameObject(name + "Point").transform;
-        point.SetParent(go.transform);
-        point.position = NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas) ? hit.position : pos;
-        point.rotation = Quaternion.Euler(0, yRot, 0);
-        var em = go.AddComponent<EnemyManager>();
-        em.enemy = enemy;
-        em.spawnTime = spawnTime;
-        em.minSpawnTime = spawnTime * 0.4f;
-        em.firstSpawnDelay = spawnTime > 10 ? 2f : spawnTime - 1f;
-        em.playerHealth = player.GetComponent<PlayerHealth>();
-        em.spawnPoints = new[] { point };
+        var point = new GameObject("SpawnPoint").transform;
+        point.SetParent(parent);
+        point.position = NavMesh.SamplePosition(pos, out var hit, 6f, NavMesh.AllAreas) ? hit.position : pos;
+        point.rotation = Quaternion.LookRotation(-new Vector3(pos.x, 0, pos.z).normalized);
+        return point;
     }
 
-    static GameObject CreateUI(PlayerHealth health)
+    static GameObject CreateXpGemPrefab()
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        go.name = "XpGem";
+        Object.DestroyImmediate(go.GetComponent<Collider>());
+        go.transform.localScale = Vector3.one * 0.28f;
+        go.transform.rotation = Quaternion.Euler(45, 0, 45);
+        var mat = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+        mat.SetColor("_BaseColor", new Color(0.2f, 1f, 0.5f));
+        mat.EnableKeyword("_EMISSION");
+        mat.SetColor("_EmissionColor", new Color(0.1f, 1.2f, 0.45f));
+        SaveAsset(mat, Gen + "XpGemMaterial.mat");
+        var r = go.GetComponent<MeshRenderer>();
+        r.sharedMaterial = mat;
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        go.AddComponent<XpGem>();
+        var prefab = PrefabUtility.SaveAsPrefabAsset(go, Gen + "XpGem.prefab");
+        Object.DestroyImmediate(go);
+        return prefab;
+    }
+
+    static void SaveAsset(Object asset, string path)
+    {
+        AssetDatabase.DeleteAsset(path);
+        AssetDatabase.CreateAsset(asset, path);
+    }
+
+    static GameObject CreateUI(PlayerHealth health, PlayerStats stats)
     {
         var font = Load<Font>("Fonts/LuckiestGuy/LuckiestGuy.ttf");
-        var canvasGo = new GameObject("HUDCanvas", typeof(Canvas), typeof(CanvasScaler));
+        var canvasGo = new GameObject("HUDCanvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
         canvasGo.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
         var scaler = canvasGo.GetComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
@@ -247,74 +307,187 @@ public static class SurvivalShooterBuilder
         dmg.raycastTarget = false;
         health.damageImage = dmg;
 
-        // Thanh máu
+        // Số sát thương bay lên
+        var popups = new GameObject("Popups", typeof(RectTransform)).GetComponent<RectTransform>();
+        popups.SetParent(canvasGo.transform, false);
+        Stretch(popups);
+
+        // ---- Góc trên trái: máu + EXP ----
         var hpUi = new GameObject("HealthUI", typeof(RectTransform)).GetComponent<RectTransform>();
         hpUi.SetParent(canvasGo.transform, false);
-        Anchor(hpUi, new Vector2(0, 0), new Vector2(30, 30), new Vector2(320, 60), new Vector2(0, 0));
+        Anchor(hpUi, new Vector2(0, 1), new Vector2(24, -20), new Vector2(380, 90), new Vector2(0, 1));
 
         var heart = NewUI<Image>("Heart", hpUi);
         heart.sprite = LoadSprite("Textures/Heart.png");
         heart.preserveAspect = true;
-        Anchor(heart.rectTransform, new Vector2(0, 0.5f), Vector2.zero, new Vector2(50, 50), new Vector2(0, 0.5f));
+        Anchor(heart.rectTransform, new Vector2(0, 1), Vector2.zero, new Vector2(44, 44), new Vector2(0, 1));
 
-        var slider = DefaultControls.CreateSlider(new DefaultControls.Resources()).GetComponent<Slider>();
-        slider.name = "HealthSlider";
-        slider.transform.SetParent(hpUi, false);
-        Anchor((RectTransform)slider.transform, new Vector2(0, 0.5f), new Vector2(65, 0), new Vector2(250, 22), new Vector2(0, 0.5f));
-        slider.interactable = false;
-        slider.transition = Selectable.Transition.None;
-        slider.minValue = 0;
-        slider.maxValue = health.startingHealth;
-        slider.value = health.startingHealth;
-        Object.DestroyImmediate(slider.handleRect.parent.gameObject);
-        slider.handleRect = null;
-        var bg = slider.transform.Find("Background").GetComponent<Image>();
-        bg.sprite = LoadSprite("Textures/UISliderBG.png");
-        bg.color = new Color(1, 1, 1, 0.6f);
-        var fill = slider.fillRect.GetComponent<Image>();
-        fill.sprite = LoadSprite("Textures/UISliderFill.png");
-        fill.color = new Color(0.9f, 0.15f, 0.15f);
-        var fillArea = (RectTransform)slider.fillRect.parent;
-        fillArea.offsetMin = Vector2.zero; fillArea.offsetMax = Vector2.zero;
-        slider.fillRect.offsetMin = Vector2.zero; slider.fillRect.offsetMax = Vector2.zero;
-        health.healthSlider = slider;
+        var hpSlider = MakeBar("HealthSlider", hpUi, new Color(0.9f, 0.15f, 0.15f), new Vector2(56, -8), new Vector2(300, 28));
+        health.healthSlider = hpSlider;
+        var hpText = NewText("HealthText", hpSlider.transform, font, 20, "100 / 100");
+        Stretch(hpText.rectTransform);
+        hpText.gameObject.AddComponent<Outline>().effectColor = new Color(0, 0, 0, 0.7f);
+        health.healthText = hpText;
 
-        // Điểm
-        var score = NewText("ScoreText", canvasGo.transform, font, 50, "Score: 0");
-        Anchor(score.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -20), new Vector2(600, 70), new Vector2(0.5f, 1));
-        score.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(3, -3);
+        var lvText = NewText("LevelText", hpUi, font, 26, "LV 1");
+        Anchor(lvText.rectTransform, new Vector2(0, 1), new Vector2(0, -52), new Vector2(56, 30), new Vector2(0, 1));
+        lvText.color = new Color(0.4f, 1f, 0.6f);
+        var xpSlider = MakeBar("XpSlider", hpUi, new Color(0.25f, 0.95f, 0.5f), new Vector2(56, -56), new Vector2(300, 16));
+
+        // Bảng chỉ số
+        var statsText = NewText("StatsText", canvasGo.transform, font, 17, "");
+        Anchor(statsText.rectTransform, new Vector2(0, 1), new Vector2(28, -120), new Vector2(260, 220), new Vector2(0, 1));
+        statsText.alignment = TextAnchor.UpperLeft;
+        statsText.color = new Color(1, 1, 1, 0.75f);
+        statsText.gameObject.AddComponent<Outline>().effectColor = new Color(0, 0, 0, 0.6f);
+
+        // ---- Giữa trên: wave + đồng hồ ----
+        var wave = NewText("WaveText", canvasGo.transform, font, 30, "WAVE 1 / 20");
+        Anchor(wave.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -14), new Vector2(500, 40), new Vector2(0.5f, 1));
+        wave.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(2, -2);
+        var timer = NewText("TimerText", canvasGo.transform, font, 56, "25");
+        Anchor(timer.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -50), new Vector2(300, 70), new Vector2(0.5f, 1));
+        timer.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(3, -3);
+
+        // ---- Góc trên phải: điểm ----
+        var score = NewText("ScoreText", canvasGo.transform, font, 34, "Score: 0");
+        Anchor(score.rectTransform, new Vector2(1, 1), new Vector2(-28, -20), new Vector2(400, 50), new Vector2(1, 1));
+        score.alignment = TextAnchor.MiddleRight;
+        score.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(2, -2);
         score.gameObject.AddComponent<ScoreManager>();
 
-        var help = NewText("HelpText", canvasGo.transform, font, 22, "WASD: di chuyen   -   Chuot: ngam   -   Click trai: ban");
-        Anchor(help.rectTransform, new Vector2(0.5f, 0), new Vector2(0, 20), new Vector2(900, 40), new Vector2(0.5f, 0));
-        help.color = new Color(1, 1, 1, 0.6f);
+        var help = NewText("HelpText", canvasGo.transform, font, 20, "WASD: di chuyen   -   Chuot: ngam   -   Giu chuot trai: ban");
+        Anchor(help.rectTransform, new Vector2(0.5f, 0), new Vector2(0, 14), new Vector2(900, 34), new Vector2(0.5f, 0));
+        help.color = new Color(1, 1, 1, 0.5f);
 
-        // Game Over
+        // Chữ to giữa màn hình (WAVE X / WAVE CLEAR)
+        var banner = NewText("BannerText", canvasGo.transform, font, 100, "WAVE 1");
+        Anchor(banner.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 120), new Vector2(1000, 140), new Vector2(0.5f, 0.5f));
+        banner.color = new Color(1f, 0.85f, 0.3f);
+        banner.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(5, -5);
+        banner.gameObject.SetActive(false);
+
+        // ---- Bảng chọn nâng cấp ----
+        var um = canvasGo.AddComponent<UpgradeManager>();
+        um.stats = stats;
+        um.health = health;
+        um.levelText = lvText;
+        um.xpSlider = xpSlider;
+        um.statsText = statsText;
+
+        var panel = NewUI<Image>("UpgradePanel", canvasGo.transform);
+        Stretch(panel.rectTransform);
+        panel.color = new Color(0.05f, 0.02f, 0.1f, 0.85f);
+        um.panel = panel.gameObject;
+        var upTitle = NewText("Title", panel.transform, font, 54, "LEN CAP!");
+        Anchor(upTitle.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 230), new Vector2(1100, 80), new Vector2(0.5f, 0.5f));
+        upTitle.color = new Color(0.4f, 1f, 0.6f);
+        upTitle.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(4, -4);
+        um.titleText = upTitle;
+
+        var hint = NewText("Hint", panel.transform, font, 22, "Click vao the hoac bam phim 1 / 2 / 3");
+        Anchor(hint.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, -250), new Vector2(900, 40), new Vector2(0.5f, 0.5f));
+        hint.color = new Color(1, 1, 1, 0.6f);
+
+        um.cardButtons = new Button[3];
+        um.cardNames = new Text[3];
+        um.cardDescriptions = new Text[3];
+        um.cardRarities = new Text[3];
+        um.cardBackgrounds = new Image[3];
+        var panelSprite = LoadSprite("Textures/UIPanel.png");
+        for (int i = 0; i < 3; i++)
+        {
+            var card = NewUI<Image>("Card" + (i + 1), panel.transform);
+            card.sprite = panelSprite;
+            card.type = Image.Type.Sliced;
+            Anchor(card.rectTransform, new Vector2(0.5f, 0.5f), new Vector2((i - 1) * 330, -10), new Vector2(300, 380), new Vector2(0.5f, 0.5f));
+            card.gameObject.AddComponent<Outline>().effectColor = new Color(1, 1, 1, 0.25f);
+            var btn = card.gameObject.AddComponent<Button>();
+            var colors = btn.colors;
+            colors.highlightedColor = new Color(1.25f, 1.25f, 1.25f);
+            colors.pressedColor = new Color(0.8f, 0.8f, 0.8f);
+            colors.fadeDuration = 0.05f;
+            btn.colors = colors;
+
+            var rarity = NewText("Rarity", card.transform, font, 22, "[1] THUONG");
+            Anchor(rarity.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -22), new Vector2(280, 34), new Vector2(0.5f, 1));
+            var name = NewText("Name", card.transform, font, 36, "Ten");
+            Anchor(name.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -70), new Vector2(280, 90), new Vector2(0.5f, 1));
+            name.horizontalOverflow = HorizontalWrapMode.Wrap;
+            name.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(2, -2);
+            var desc = NewText("Description", card.transform, font, 22, "Mo ta");
+            Anchor(desc.rectTransform, new Vector2(0.5f, 1), new Vector2(0, -175), new Vector2(260, 190), new Vector2(0.5f, 1));
+            desc.alignment = TextAnchor.UpperCenter;
+            desc.horizontalOverflow = HorizontalWrapMode.Wrap;
+            desc.color = new Color(0.92f, 0.92f, 0.95f);
+
+            um.cardButtons[i] = btn;
+            um.cardNames[i] = name;
+            um.cardDescriptions[i] = desc;
+            um.cardRarities[i] = rarity;
+            um.cardBackgrounds[i] = card;
+        }
+
+        // ---- Game Over / Chiến thắng ----
         var go = new GameObject("GameOver", typeof(RectTransform), typeof(CanvasGroup));
         go.transform.SetParent(canvasGo.transform, false);
         Stretch((RectTransform)go.transform);
         var group = go.GetComponent<CanvasGroup>();
         group.alpha = 0;
         group.blocksRaycasts = false;
+        group.interactable = false;
         var overlay = NewUI<Image>("Overlay", go.transform);
         Stretch(overlay.rectTransform);
-        overlay.color = new Color(0.08f, 0.02f, 0.12f, 0.75f);
-        var title = NewText("GameOverText", go.transform, font, 110, "Game Over!");
-        Anchor(title.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 50), new Vector2(1000, 150), new Vector2(0.5f, 0.5f));
+        overlay.color = new Color(0.08f, 0.02f, 0.12f, 0.8f);
+        var title = NewText("GameOverText", go.transform, font, 110, "GAME OVER!");
+        Anchor(title.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 120), new Vector2(1100, 150), new Vector2(0.5f, 0.5f));
         title.color = new Color(1f, 0.85f, 0.3f);
         title.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(5, -5);
-        var best = NewText("HighScoreText", go.transform, font, 44, "Best: 0");
-        Anchor(best.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, -50), new Vector2(800, 70), new Vector2(0.5f, 0.5f));
-        var restart = NewText("RestartText", go.transform, font, 26, "Choi lai sau vai giay...");
-        Anchor(restart.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, -110), new Vector2(800, 50), new Vector2(0.5f, 0.5f));
-        restart.color = new Color(1, 1, 1, 0.7f);
+        var summary = NewText("SummaryText", go.transform, font, 32, "");
+        Anchor(summary.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, -10), new Vector2(900, 140), new Vector2(0.5f, 0.5f));
+        summary.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+        var restartBtnImg = NewUI<Image>("RestartButton", go.transform);
+        restartBtnImg.sprite = LoadSprite("Textures/UIButtonDefault.png");
+        restartBtnImg.type = Image.Type.Sliced;
+        Anchor(restartBtnImg.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, -150), new Vector2(320, 70), new Vector2(0.5f, 0.5f));
+        var restartBtn = restartBtnImg.gameObject.AddComponent<Button>();
+        var rLabel = NewText("Label", restartBtnImg.transform, font, 30, "CHOI LAI (R)");
+        Stretch(rLabel.rectTransform);
+        rLabel.color = new Color(0.2f, 0.12f, 0.25f);
 
         var gom = canvasGo.AddComponent<GameOverManager>();
         gom.playerHealth = health;
         gom.gameOverGroup = group;
-        gom.highScoreText = best;
+        gom.titleText = title;
+        gom.summaryText = summary;
+        gom.restartButton = restartBtn;
         return canvasGo;
     }
+
+    static Slider MakeBar(string name, Transform parent, Color fillColor, Vector2 pos, Vector2 size)
+    {
+        var slider = DefaultControls.CreateSlider(new DefaultControls.Resources()).GetComponent<Slider>();
+        slider.name = name;
+        slider.transform.SetParent(parent, false);
+        Anchor((RectTransform)slider.transform, new Vector2(0, 1), pos, size, new Vector2(0, 1));
+        slider.interactable = false;
+        slider.transition = Selectable.Transition.None;
+        slider.minValue = 0;
+        Object.DestroyImmediate(slider.handleRect.parent.gameObject);
+        slider.handleRect = null;
+        var bg = slider.transform.Find("Background").GetComponent<Image>();
+        bg.sprite = LoadSprite("Textures/UISliderBG.png");
+        bg.color = new Color(0, 0, 0, 0.55f);
+        var fill = slider.fillRect.GetComponent<Image>();
+        fill.sprite = LoadSprite("Textures/UISliderFill.png");
+        fill.color = fillColor;
+        var fillArea = (RectTransform)slider.fillRect.parent;
+        fillArea.offsetMin = Vector2.zero; fillArea.offsetMax = Vector2.zero;
+        slider.fillRect.offsetMin = Vector2.zero; slider.fillRect.offsetMax = Vector2.zero;
+        return slider;
+    }
+
 
     // ---------- Animator ----------
 

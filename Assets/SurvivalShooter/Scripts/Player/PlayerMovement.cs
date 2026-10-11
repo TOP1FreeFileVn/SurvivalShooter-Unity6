@@ -11,10 +11,12 @@ public class PlayerMovement : MonoBehaviour
     Animator anim;
     Rigidbody playerRigidbody;
     Camera cam;
+    PlayerStats stats;
     int floorMask;
 
     void Awake()
     {
+        stats = GetComponent<PlayerStats>();
         floorMask = LayerMask.GetMask("Floor");
         anim = GetComponent<Animator>();
         playerRigidbody = GetComponent<Rigidbody>();
@@ -49,7 +51,7 @@ public class PlayerMovement : MonoBehaviour
     void Move(float h, float v)
     {
         movement.Set(h, 0f, v);
-        movement = movement * speed * Time.deltaTime;
+        movement = movement * speed * stats.moveSpeedMultiplier * Time.deltaTime;
         playerRigidbody.MovePosition(transform.position + movement);
     }
 
